@@ -31,6 +31,28 @@ def _flatten_yfinance_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _normalize_ticker(ticker: str) -> str:
+    normalized = ticker.upper().strip()
+    if not normalized:
+        raise ValueError("Ticker cannot be empty")
+    if "," in normalized or ";" in normalized or any(ch.isspace() for ch in normalized):
+        raise ValueError("Enter a single yfinance ticker")
+    return normalized
+
+
+def _reject_duplicate_ohlcv_fields(df: pd.DataFrame) -> None:
+    columns = pd.Index(df.columns)
+    duplicated = columns[columns.duplicated()].unique()
+    ohlcv_fields = {"open", "high", "low", "close", "adj_close", "volume"}
+    duplicated_ohlcv = sorted(str(col) for col in duplicated if str(col) in ohlcv_fields)
+    if duplicated_ohlcv:
+        fields = ", ".join(duplicated_ohlcv)
+        raise ValueError(
+            f"Downloaded data contains ambiguous duplicate OHLCV fields: {fields}. "
+            "Enter a single yfinance ticker."
+        )
+
+
 def fetch_ohlcv(req: MarketDataRequest) -> pd.DataFrame:
     """Fetch OHLCV data from yfinance.
 
@@ -39,14 +61,12 @@ def fetch_ohlcv(req: MarketDataRequest) -> pd.DataFrame:
     available. If a start/end date is provided, yfinance uses those dates instead
     of the period argument.
     """
+    ticker = _normalize_ticker(req.ticker)
+
     try:
         import yfinance as yf
     except ImportError as exc:  # pragma: no cover - environment guard
         raise ImportError("Install yfinance with `pip install yfinance`.") from exc
-
-    ticker = req.ticker.upper().strip()
-    if not ticker:
-        raise ValueError("Ticker cannot be empty.")
 
     download_kwargs = dict(
         tickers=ticker,
@@ -70,23 +90,33 @@ def fetch_ohlcv(req: MarketDataRequest) -> pd.DataFrame:
         raise ValueError(f"No data returned for ticker={ticker!r}.")
 
     df = _flatten_yfinance_columns(df).copy()
-    df.index = pd.to_datetime(df.index)
+    df.index = pd.to_datetime(df.index, errors="coerce")
+    df = df[df.index.notna()]
+    if df.empty:
+        raise ValueError(f"No dated data returned for ticker={ticker!r}.")
     df = df.sort_index()
 
     rename_map = {c: c.lower().replace(" ", "_") for c in df.columns}
     df = df.rename(columns=rename_map)
+    _reject_duplicate_ohlcv_fields(df)
 
     if "adj_close" in df.columns:
+        df["adj_close"] = pd.to_numeric(df["adj_close"], errors="coerce")
         df["price"] = df["adj_close"]
         price_source = "adj_close"
     elif "close" in df.columns:
         # This happens when auto_adjust=True or for assets where Adj Close is absent.
         # With auto_adjust=True, close is already adjusted by yfinance.
+        df["close"] = pd.to_numeric(df["close"], errors="coerce")
         df["adj_close"] = df["close"]
         df["price"] = df["adj_close"]
         price_source = "close_as_adjusted"
     else:
         raise ValueError("Downloaded data does not contain Close or Adj Close.")
+
+    df = df[df["price"].notna()].copy()
+    if df.empty:
+        raise ValueError(f"No usable price data returned for ticker={ticker!r}.")
 
     df.attrs["ticker"] = ticker
     df.attrs["period"] = req.period

@@ -55,3 +55,51 @@ def test_fetch_ohlcv_empty_raises(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_fetch_ohlcv_empty_ticker_raises() -> None:
     with pytest.raises(ValueError, match="Ticker cannot be empty"):
         fetch_ohlcv(MarketDataRequest(ticker=""))
+
+
+def test_fetch_ohlcv_rejects_multiple_ticker_input(monkeypatch: pytest.MonkeyPatch) -> None:
+    _ensure_yfinance_module()
+
+    def fail_if_called(**_: object) -> pd.DataFrame:
+        raise AssertionError("download should not be called for multi-ticker input")
+
+    monkeypatch.setattr("yfinance.download", fail_if_called)
+    with pytest.raises(ValueError, match="Enter a single yfinance ticker"):
+        fetch_ohlcv(MarketDataRequest(ticker="MSFT AAPL"))
+
+
+def test_fetch_ohlcv_requires_usable_price_data(monkeypatch: pytest.MonkeyPatch) -> None:
+    _ensure_yfinance_module()
+    idx = pd.date_range("2024-01-01", periods=3, freq="B")
+    fake = pd.DataFrame(
+        {
+            "Open": [100.0, 101.0, 102.0],
+            "High": [101.0, 102.0, 103.0],
+            "Low": [99.0, 100.0, 101.0],
+            "Close": [np.nan, np.nan, np.nan],
+            "Adj Close": [np.nan, np.nan, np.nan],
+            "Volume": [1_000_000.0, 1_000_000.0, 1_000_000.0],
+        },
+        index=idx,
+    )
+    monkeypatch.setattr("yfinance.download", lambda **_: fake.copy())
+
+    with pytest.raises(ValueError, match="No usable price data"):
+        fetch_ohlcv(MarketDataRequest(ticker="BAD"))
+
+
+def test_fetch_ohlcv_allows_special_single_ticker_formats(monkeypatch: pytest.MonkeyPatch) -> None:
+    _ensure_yfinance_module()
+    fake = _make_ohlcv(with_adj_close=True)
+    seen_tickers: list[str] = []
+
+    def fake_download(**kwargs: object) -> pd.DataFrame:
+        seen_tickers.append(str(kwargs["tickers"]))
+        return fake.copy()
+
+    monkeypatch.setattr("yfinance.download", fake_download)
+    for ticker in ("BTC-USD", "^GSPC", "BRK-B"):
+        df = fetch_ohlcv(MarketDataRequest(ticker=ticker))
+        assert not df.empty
+
+    assert seen_tickers == ["BTC-USD", "^GSPC", "BRK-B"]

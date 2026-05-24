@@ -80,6 +80,9 @@ with st.sidebar:
     period = "max"
     st.caption("Historical period: `max` — pulls the maximum available yfinance history for the selected ticker.")
     interval = st.selectbox("Interval", ["1d", "1wk", "1mo"], index=0)
+    if st.button("Refresh data"):
+        st.cache_data.clear()
+        st.rerun()
 
     st.header("MA / Stats")
     ma_type = st.selectbox(
@@ -130,6 +133,16 @@ except ValueError:
     st.error("MA Lengths must be comma-separated integers, e.g. 10,20,21,50,100,200.")
     st.stop()
 
+focus_length = int(focus_length)
+if not lengths:
+    st.error("MA Lengths must include at least one positive integer.")
+    st.stop()
+if any(length <= 0 for length in lengths):
+    st.error("MA Lengths must be positive integers.")
+    st.stop()
+if focus_length not in lengths:
+    lengths = (*lengths, focus_length)
+
 if not ticker:
     st.warning("Enter a yfinance ticker in the left sidebar.")
     st.stop()
@@ -160,20 +173,19 @@ def load_and_compute(
 
 try:
     features = load_and_compute(ticker, period, interval, ma_type, lengths, int(rolling_window))
+except ValueError as exc:
+    st.error(str(exc))
+    st.stop()
 except Exception as exc:
     st.error(f"Could not load data for {ticker}: {exc}")
     st.stop()
 
-prefix = f"{ma_type.lower()}_{int(focus_length)}"
+prefix = f"{ma_type.lower()}_{focus_length}"
 ma_col = f"{prefix}_ma"
 dev_col = f"{prefix}_dev_pct"
 pct_col = f"{prefix}_roll_pctile"
 z_col = f"{prefix}_roll_z"
 tail_col = f"{prefix}_roll_tail"
-
-if ma_col not in features.columns:
-    st.warning("Focus length is not in the MA Lengths list. Add it to the left-sidebar MA Lengths input to study it.")
-    st.stop()
 
 snapshot = latest_snapshot_table(features, ma_type, lengths)
 valid_rows = features["price"].dropna().shape[0]
@@ -181,9 +193,15 @@ price_source = features.attrs.get("price_source", "—")
 first_date = features.index.min()
 last_date = features.index.max()
 
+if features[pct_col].dropna().empty:
+    st.warning(
+        f"Not enough history for {ma_type} {focus_length} with rolling window {int(rolling_window)}. "
+        f"Loaded {valid_rows:,} usable bars; reduce the rolling window or choose a ticker with more history."
+    )
+
 event_config = EventStudyConfig(
     ma_type=ma_type,
-    focus_length=int(focus_length),
+    focus_length=focus_length,
     direction=direction,
     upside_threshold=float(upside_threshold),
     downside_threshold=float(downside_threshold),
@@ -207,7 +225,7 @@ m6, m7, m8, m9, m10 = st.columns(5)
 m6.metric("First date", str(pd.Timestamp(first_date).date()) if pd.notna(first_date) else "—")
 m7.metric("Last date", str(pd.Timestamp(last_date).date()) if pd.notna(last_date) else "—")
 m8.metric("MA type", ma_type)
-m9.metric("Focus MA", str(int(focus_length)))
+m9.metric("Focus MA", str(focus_length))
 m10.metric("Rolling window", str(int(rolling_window)))
 
 run_meta = RunMetadata(
@@ -219,7 +237,7 @@ run_meta = RunMetadata(
     last_date=str(pd.Timestamp(last_date).date()) if pd.notna(last_date) else "—",
     price_source=price_source,
     ma_type=ma_type,
-    focus_length=int(focus_length),
+    focus_length=focus_length,
     rolling_window=int(rolling_window),
 )
 _render_inline("Interpretation - Run summary", interpret_run_summary(run_meta))
@@ -264,7 +282,7 @@ with c1:
         go.Scatter(
             x=features.index,
             y=features[ma_col],
-            name=f"{ma_type} {int(focus_length)}",
+            name=f"{ma_type} {focus_length}",
             line=dict(color="#ff7f0e"),
         )
     )
@@ -312,7 +330,7 @@ with c2:
     st.dataframe(format_snapshot(snapshot), use_container_width=True, hide_index=True)
     _render_inline(
         "Interpretation - Latest snapshot",
-        interpret_latest_snapshot(snapshot, int(focus_length)),
+        interpret_latest_snapshot(snapshot, focus_length),
     )
 
 st.subheader("Focus MA-Distance Diagnostics")
@@ -343,11 +361,11 @@ focus_diag_df = pd.DataFrame(
 )
 _render_inline(
     "Interpretation - Focus diagnostics",
-    interpret_focus_diagnostics(focus_diag_df, int(focus_length)),
+    interpret_focus_diagnostics(focus_diag_df, focus_length),
 )
 
 st.subheader("Focus MA-distance distribution")
-dev_series = focus_distance_series(features, ma_type, int(focus_length))
+dev_series = focus_distance_series(features, ma_type, focus_length)
 if dev_series.empty:
     st.info("No deviation data yet — increase data history or reduce rolling window.")
 else:
