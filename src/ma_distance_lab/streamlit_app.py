@@ -48,7 +48,7 @@ from ma_distance_lab.reporting import (
 )
 
 
-APP_VERSION = "no-autofetch-rate-limit-safe-2026-05-24"
+APP_VERSION = "no-autofetch-width-safe-2026-05-24"
 
 if "active_ticker" not in st.session_state:
     st.session_state["active_ticker"] = None
@@ -353,7 +353,7 @@ with c1:
         legend=dict(orientation="h", yanchor="bottom", y=1.02),
         xaxis_rangeslider_visible=False,
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
     _render_inline(
         "Interpretation - Price chart",
         interpret_price_chart(run_meta, len(event_dates), len(upside_dates), len(downside_dates)),
@@ -361,7 +361,7 @@ with c1:
 
 with c2:
     st.subheader("Latest Snapshot")
-    st.dataframe(format_snapshot(snapshot), use_container_width=True, hide_index=True)
+    st.dataframe(format_snapshot(snapshot), width="stretch", hide_index=True)
     _render_inline(
         "Interpretation - Latest snapshot",
         interpret_latest_snapshot(snapshot, focus_length),
@@ -383,7 +383,7 @@ for y in (95, 98, 5, 2):
 if tail_col in features.columns:
     fig2.add_trace(go.Scatter(x=features.index, y=features[tail_col], line=dict(color="#9467bd")), row=4, col=1)
 fig2.update_layout(height=900, showlegend=False, margin=dict(l=10, r=10, t=40, b=10))
-st.plotly_chart(fig2, use_container_width=True)
+st.plotly_chart(fig2, width="stretch")
 
 focus_diag_df = pd.DataFrame(
     {
@@ -412,7 +412,7 @@ else:
         annotation_position="top",
     )
     hist.update_layout(height=360, margin=dict(l=10, r=10, t=30, b=10), showlegend=False)
-    st.plotly_chart(hist, use_container_width=True)
+    st.plotly_chart(hist, width="stretch")
     _render_inline(
         "Interpretation - Distance distribution",
         interpret_distance_distribution(dev_series),
@@ -423,7 +423,7 @@ st.caption(
     "Events are triggered by rolling percentile to reduce look-ahead bias. "
     "Toggle MFE / MDD or quantile checkboxes in the sidebar for additional columns."
 )
-st.dataframe(format_event_summary(summary), use_container_width=True, hide_index=True)
+st.dataframe(format_event_summary(summary), width="stretch", hide_index=True)
 _render_inline(
     "Interpretation - Event study",
     interpret_event_summary(summary, int(events.sum())),
@@ -434,7 +434,7 @@ st.caption(
     "Normal = unconditional forward returns over all eligible bars (focus MA + rolling percentile available). "
     "Edge columns are event metric minus normal metric."
 )
-st.dataframe(format_comparison_table(comparison), use_container_width=True, hide_index=True)
+st.dataframe(format_comparison_table(comparison), width="stretch", hide_index=True)
 _render_inline(
     "Interpretation - Event vs Normal",
     interpret_event_vs_normal(comparison),
@@ -477,7 +477,7 @@ with st.expander("Edge bar charts"):
                 title=title,
             )
             bar.update_layout(height=320, margin=dict(l=10, r=10, t=40, b=10))
-            col.plotly_chart(bar, use_container_width=True)
+            col.plotly_chart(bar, width="stretch")
         if show_inline:
             st.markdown(interpret_edge_bars(comparison))
 
@@ -490,7 +490,7 @@ else:
         c for c in event_returns.columns if c.startswith(("fwd_", "mfe_", "mdd_"))
     ]
     details = details[[c for c in ordered if c in details.columns]]
-    st.dataframe(format_event_details(details), use_container_width=True, hide_index=True)
+    st.dataframe(format_event_details(details), width="stretch", hide_index=True)
     _render_inline(
         "Interpretation - Event details",
         interpret_event_details(event_returns),
@@ -509,7 +509,7 @@ else:
             if not long.empty:
                 box = px.box(long, x="horizon", y="ret", points="suspectedoutliers")
                 box.update_layout(height=400, margin=dict(l=10, r=10, t=30, b=10))
-                st.plotly_chart(box, use_container_width=True)
+                st.plotly_chart(box, width="stretch")
             else:
                 st.info("Not enough completed forward windows to plot distributions yet.")
         with tab_hist:
@@ -521,7 +521,7 @@ else:
                     continue
                 hfig = px.histogram(series, nbins=30, title=f"fwd_{h}")
                 hfig.update_layout(height=320, margin=dict(l=10, r=10, t=40, b=10), showlegend=False)
-                col.plotly_chart(hfig, use_container_width=True)
+                col.plotly_chart(hfig, width="stretch")
         _render_inline(
             "Interpretation - Forward-return distributions",
             interpret_forward_distributions(event_returns),
