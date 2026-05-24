@@ -77,21 +77,26 @@ with st.expander("EWMA reference (formula)", expanded=False):
 
 with st.sidebar:
     st.header("Data")
-    st.caption(f"App version: `{APP_VERSION}`")
-    with st.form("ticker_form"):
+    with st.sidebar.form("ticker_form"):
         ticker_input = st.text_input(
             "YFinance Ticker",
-            value=st.session_state.get("active_ticker", "NVDA"),
-            help="Enter any yfinance-compatible ticker manually, e.g. NVDA, SPY, QQQ, GLD, BTC-USD, ^GSPC.",
+            value=st.session_state.get("ticker_draft", st.session_state.get("active_ticker", "NVDA")),
+            help="Enter one yfinance-compatible ticker, e.g. NVDA, SPY, QQQ, GLD, BTC-USD, ^GSPC, BRK-B.",
+            key="ticker_draft",
         )
         submitted = st.form_submit_button("Run Analysis")
     if submitted:
-        st.session_state["active_ticker"] = ticker_input.upper().strip()
-    ticker = st.session_state.get("active_ticker", "NVDA")
+        cleaned = ticker_input.strip().upper()
+        st.session_state["active_ticker"] = cleaned
+        st.cache_data.clear()
+        st.rerun()
+    ticker = st.session_state["active_ticker"]
+    st.sidebar.caption(f"App version: {APP_VERSION}")
+    st.sidebar.caption(f"Analyzing ticker: {ticker}")
     period = "max"
     st.caption("Historical period: `max` — pulls the maximum available yfinance history for the selected ticker.")
     interval = st.selectbox("Interval", ["1d", "1wk", "1mo"], index=0)
-    if st.button("Refresh / Clear Cache"):
+    if st.sidebar.button("Refresh / Clear Cache"):
         st.cache_data.clear()
         st.rerun()
 
@@ -157,8 +162,8 @@ if focus_length not in lengths:
 if focus_length_auto_added:
     st.sidebar.info(f"Added focus length {focus_length} to MA Lengths for this run.")
 
-if not ticker:
-    st.warning("Enter a yfinance ticker in the left sidebar.")
+if not ticker.strip():
+    st.error("Ticker cannot be empty. Enter one ticker and click Run Analysis.")
     st.stop()
 
 
@@ -195,6 +200,8 @@ except Exception as exc:
     with st.expander("Technical details"):
         st.exception(exc)
     st.stop()
+
+st.sidebar.success(f"Loaded {ticker}")
 
 prefix = f"{ma_type.lower()}_{focus_length}"
 ma_col = f"{prefix}_ma"
