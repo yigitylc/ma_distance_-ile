@@ -48,7 +48,12 @@ from ma_distance_lab.reporting import (
 )
 
 
-APP_VERSION = "no-autofetch-width-safe-2026-05-24"
+APP_VERSION = "robust-yfinance-fallback-2026-05-24"
+DATA_CACHE_TTL_SECONDS = 12 * 60 * 60
+RATE_LIMIT_UI_MESSAGE = (
+    "Yahoo Finance rate-limited this public cloud session. Try again later, click Refresh / Clear Cache, "
+    "or use another data source."
+)
 
 if "active_ticker" not in st.session_state:
     st.session_state["active_ticker"] = None
@@ -178,7 +183,24 @@ if not ticker.strip():
     st.stop()
 
 
-@st.cache_data(show_spinner=False)
+def _is_rate_limit_message(message: str) -> bool:
+    text = message.lower()
+    return "rate-limit" in text or "rate limited" in text or "too many requests" in text or "429" in text
+
+
+@st.cache_data(ttl=DATA_CACHE_TTL_SECONDS, show_spinner=False)
+def load_price_data(ticker: str, period: str, interval: str) -> pd.DataFrame:
+    return fetch_ohlcv(
+        MarketDataRequest(
+            ticker=ticker,
+            period=period,
+            interval=interval,
+            auto_adjust=False,
+        )
+    )
+
+
+@st.cache_data(ttl=DATA_CACHE_TTL_SECONDS, show_spinner=False)
 def load_and_compute(
     ticker: str,
     period: str,
@@ -187,14 +209,7 @@ def load_and_compute(
     lengths: tuple[int, ...],
     rolling_window: int,
 ) -> pd.DataFrame:
-    raw = fetch_ohlcv(
-        MarketDataRequest(
-            ticker=ticker,
-            period=period,
-            interval=interval,
-            auto_adjust=False,
-        )
-    )
+    raw = load_price_data(ticker, period, interval)
     return build_ma_distance_features(
         raw,
         config=FeatureConfig(ma_type=ma_type, lengths=lengths, rolling_window=rolling_window),
@@ -202,17 +217,19 @@ def load_and_compute(
 
 
 try:
-    features = load_and_compute(ticker, period, interval, ma_type, lengths, int(rolling_window))
+    with st.spinner(f"Loading {ticker} from Yahoo Finance..."):
+        features = load_and_compute(ticker, period, interval, ma_type, lengths, int(rolling_window))
 except ValueError as exc:
-    st.error(str(exc))
+    if _is_rate_limit_message(str(exc)):
+        st.warning(RATE_LIMIT_UI_MESSAGE)
+    else:
+        st.error(str(exc))
     st.stop()
 except Exception as exc:
     st.error("Unexpected error while loading ticker data.")
     with st.expander("Technical details"):
         st.exception(exc)
     st.stop()
-
-st.sidebar.success(f"Loaded {ticker}")
 
 prefix = f"{ma_type.lower()}_{focus_length}"
 ma_col = f"{prefix}_ma"
@@ -224,8 +241,10 @@ tail_col = f"{prefix}_roll_tail"
 snapshot = latest_snapshot_table(features, ma_type, lengths)
 valid_rows = features["price"].dropna().shape[0]
 price_source = features.attrs.get("price_source", "—")
+data_source = features.attrs.get("data_source", "Yahoo Finance")
 first_date = features.index.min()
 last_date = features.index.max()
+st.sidebar.success(f"Loaded {ticker}: {valid_rows:,} rows")
 
 if features[pct_col].dropna().empty:
     st.warning(
@@ -254,13 +273,14 @@ m1.metric("Ticker", ticker)
 m2.metric("Interval", interval)
 m3.metric("Period", period)
 m4.metric("Bars loaded", f"{valid_rows:,}")
-m5.metric("Price source", price_source)
+m5.metric("Data source", data_source)
 m6, m7, m8, m9, m10 = st.columns(5)
 m6.metric("First date", str(pd.Timestamp(first_date).date()) if pd.notna(first_date) else "—")
 m7.metric("Last date", str(pd.Timestamp(last_date).date()) if pd.notna(last_date) else "—")
 m8.metric("MA type", ma_type)
 m9.metric("Focus MA", str(focus_length))
 m10.metric("Rolling window", str(int(rolling_window)))
+st.caption(f"Price source: {price_source}")
 
 run_meta = RunMetadata(
     ticker=ticker,
