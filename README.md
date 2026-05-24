@@ -1,8 +1,6 @@
 # MA Distance Lab
 
-A Python research scaffold for studying how far price is from moving averages and what historically happens after statistically extreme MA-distance conditions.
-
-This project is designed as the Python research companion to a TradingView Pine indicator. TradingView is useful for live chart monitoring; this Python project is for deeper, more precise research using yfinance adjusted-close data.
+A Python research for studying how far price is from moving averages and what historically happens after statistically extreme MA-distance conditions.
 
 ## Core Questions
 
