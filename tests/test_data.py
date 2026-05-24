@@ -103,3 +103,25 @@ def test_fetch_ohlcv_allows_special_single_ticker_formats(monkeypatch: pytest.Mo
         assert not df.empty
 
     assert seen_tickers == ["BTC-USD", "^GSPC", "BRK-B"]
+
+
+def test_fetch_ohlcv_converts_yfinance_rate_limit_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    _ensure_yfinance_module()
+
+    class YFRateLimitError(Exception):
+        pass
+
+    def raise_rate_limit(**_: object) -> pd.DataFrame:
+        raise YFRateLimitError("Too Many Requests. Rate limited. Try after a while.")
+
+    monkeypatch.setattr("yfinance.download", raise_rate_limit)
+    with pytest.raises(ValueError, match="Yahoo Finance rate-limited"):
+        fetch_ohlcv(MarketDataRequest(ticker="NVDA"))
+
+
+def test_fetch_ohlcv_converts_yfinance_rate_limit_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    _ensure_yfinance_module()
+    monkeypatch.setattr("yfinance.download", lambda **_: "YFRateLimitError: Too Many Requests")
+
+    with pytest.raises(ValueError, match="Yahoo Finance rate-limited"):
+        fetch_ohlcv(MarketDataRequest(ticker="NVDA"))

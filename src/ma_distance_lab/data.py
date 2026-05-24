@@ -6,6 +6,12 @@ from typing import Optional
 import pandas as pd
 
 
+RATE_LIMIT_MESSAGE = (
+    "Yahoo Finance rate-limited this Streamlit Cloud session. Wait a few minutes and try again, "
+    "or use Refresh / Clear Cache."
+)
+
+
 @dataclass(frozen=True)
 class MarketDataRequest:
     ticker: str
@@ -53,6 +59,14 @@ def _reject_duplicate_ohlcv_fields(df: pd.DataFrame) -> None:
         )
 
 
+def _is_yfinance_rate_limit(value: object) -> bool:
+    text = f"{type(value).__name__} {value!r} {value}"
+    return any(
+        marker.lower() in text.lower()
+        for marker in ("YFRateLimitError", "Too Many Requests", "Rate limited")
+    )
+
+
 def fetch_ohlcv(req: MarketDataRequest) -> pd.DataFrame:
     """Fetch OHLCV data from yfinance.
 
@@ -84,7 +98,15 @@ def fetch_ohlcv(req: MarketDataRequest) -> pd.DataFrame:
     else:
         download_kwargs["period"] = req.period or "max"
 
-    df = yf.download(**download_kwargs)
+    try:
+        df = yf.download(**download_kwargs)
+    except Exception as exc:
+        if _is_yfinance_rate_limit(exc):
+            raise ValueError(RATE_LIMIT_MESSAGE) from exc
+        raise
+
+    if _is_yfinance_rate_limit(df):
+        raise ValueError(RATE_LIMIT_MESSAGE)
 
     if df.empty:
         raise ValueError(f"No data returned for ticker={ticker!r}.")

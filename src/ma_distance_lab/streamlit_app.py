@@ -48,16 +48,18 @@ from ma_distance_lab.reporting import (
 )
 
 
-APP_VERSION = "ticker-form-fix-2026-05-24"
+APP_VERSION = "no-autofetch-rate-limit-safe-2026-05-24"
 
 if "active_ticker" not in st.session_state:
-    st.session_state["active_ticker"] = "NVDA"
+    st.session_state["active_ticker"] = None
+if "has_submitted" not in st.session_state:
+    st.session_state["has_submitted"] = False
 
 st.set_page_config(page_title="MA Distance Lab", layout="wide")
 st.title("MA Distance Lab")
 st.caption(
     "Moving-average distance, rolling percentiles, tail probability, and forward-return event studies. "
-    "Data defaults to yfinance period='max' and uses adjusted close as the research price series."
+    "Data is fetched from yfinance only after Run Analysis and uses adjusted close as the research price series."
 )
 
 with st.expander("EWMA reference (formula)", expanded=False):
@@ -80,21 +82,24 @@ with st.sidebar:
     with st.sidebar.form("ticker_form"):
         ticker_input = st.text_input(
             "YFinance Ticker",
-            value=st.session_state.get("ticker_draft", st.session_state.get("active_ticker", "NVDA")),
+            value=st.session_state.get("ticker_draft", "NVDA"),
             help="Enter one yfinance-compatible ticker, e.g. NVDA, SPY, QQQ, GLD, BTC-USD, ^GSPC, BRK-B.",
             key="ticker_draft",
         )
         submitted = st.form_submit_button("Run Analysis")
     if submitted:
         cleaned = ticker_input.strip().upper()
+        if not cleaned:
+            st.error("Ticker cannot be empty. Enter one ticker and click Run Analysis.")
+            st.stop()
         st.session_state["active_ticker"] = cleaned
-        st.cache_data.clear()
+        st.session_state["has_submitted"] = True
         st.rerun()
-    ticker = st.session_state["active_ticker"]
     st.sidebar.caption(f"App version: {APP_VERSION}")
-    st.sidebar.caption(f"Analyzing ticker: {ticker}")
-    period = "max"
-    st.caption("Historical period: `max` — pulls the maximum available yfinance history for the selected ticker.")
+    if st.session_state.get("has_submitted", False):
+        st.sidebar.caption(f"Current submitted ticker: {st.session_state['active_ticker']}")
+    st.sidebar.caption("Data source: Yahoo Finance via yfinance. Public cloud apps may occasionally be rate-limited.")
+    period = st.selectbox("Historical period", ["5y", "10y", "max"], index=1)
     interval = st.selectbox("Interval", ["1d", "1wk", "1mo"], index=0)
     if st.sidebar.button("Refresh / Clear Cache"):
         st.cache_data.clear()
@@ -135,6 +140,12 @@ with st.sidebar:
 
 show_inline = show_commentary and commentary_placement in ("After each section", "Both")
 show_bottom = show_commentary and commentary_placement in ("Bottom report only", "Both")
+
+if not st.session_state.get("has_submitted", False):
+    st.info("Enter a ticker and click Run Analysis to start.")
+    st.stop()
+
+ticker = st.session_state["active_ticker"]
 
 
 def _render_inline(title: str, body: str, *, expanded: bool = True) -> None:
