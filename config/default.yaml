@@ -1,0 +1,13 @@
+ticker: NVDA
+period: max
+start: null
+end: null
+interval: "1d"
+ma_type: EMA
+lengths: [10, 20, 21, 50, 100, 200]
+focus_length: 50
+rolling_window: 500
+upside_percentile_threshold: 95.0
+downside_percentile_threshold: 5.0
+min_event_gap: 10
+forward_horizons: [5, 10, 21, 63]
