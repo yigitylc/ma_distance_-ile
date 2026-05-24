@@ -48,12 +48,8 @@ from ma_distance_lab.reporting import (
 )
 
 
-APP_VERSION = "robust-yfinance-fallback-2026-05-24"
+APP_VERSION = "simple-yfinance-auto-adjust-2026-05-24"
 DATA_CACHE_TTL_SECONDS = 12 * 60 * 60
-RATE_LIMIT_UI_MESSAGE = (
-    "Yahoo Finance rate-limited this public cloud session. Try again later, click Refresh / Clear Cache, "
-    "or use another data source."
-)
 
 if "active_ticker" not in st.session_state:
     st.session_state["active_ticker"] = None
@@ -64,7 +60,7 @@ st.set_page_config(page_title="MA Distance Lab", layout="wide")
 st.title("MA Distance Lab")
 st.caption(
     "Moving-average distance, rolling percentiles, tail probability, and forward-return event studies. "
-    "Data is fetched from yfinance only after Run Analysis and uses adjusted close as the research price series."
+    "Data is fetched from yfinance only after Run Analysis and uses auto-adjusted Close as the research price series."
 )
 
 with st.expander("EWMA reference (formula)", expanded=False):
@@ -183,11 +179,6 @@ if not ticker.strip():
     st.stop()
 
 
-def _is_rate_limit_message(message: str) -> bool:
-    text = message.lower()
-    return "rate-limit" in text or "rate limited" in text or "too many requests" in text or "429" in text
-
-
 @st.cache_data(ttl=DATA_CACHE_TTL_SECONDS, show_spinner=False)
 def load_price_data(ticker: str, period: str, interval: str) -> pd.DataFrame:
     return fetch_ohlcv(
@@ -195,7 +186,6 @@ def load_price_data(ticker: str, period: str, interval: str) -> pd.DataFrame:
             ticker=ticker,
             period=period,
             interval=interval,
-            auto_adjust=False,
         )
     )
 
@@ -220,10 +210,9 @@ try:
     with st.spinner(f"Loading {ticker} from Yahoo Finance..."):
         features = load_and_compute(ticker, period, interval, ma_type, lengths, int(rolling_window))
 except ValueError as exc:
-    if _is_rate_limit_message(str(exc)):
-        st.warning(RATE_LIMIT_UI_MESSAGE)
-    else:
-        st.error(str(exc))
+    st.error(str(exc))
+    with st.expander("Technical details"):
+        st.exception(exc)
     st.stop()
 except Exception as exc:
     st.error("Unexpected error while loading ticker data.")
