@@ -70,22 +70,12 @@ The left sidebar controls the main research variables:
 - **Rolling Window:** manually adjustable; used for rolling Z-score, rolling percentile, tail probability, and event triggers.
 - **Focus Length:** the specific MA length used for diagnostics and event study.
 
-## Suggested Workflow
 
-1. Start with one ticker, one MA type, and one focus length.
-2. Compare rolling percentile versus expanding percentile.
-3. Use event studies to check forward 5/10/21/63-bar returns after extension events.
-4. Expand to a ticker universe only after single-symbol logic is validated.
-5. Treat the TradingView indicator as the live monitoring layer and this Python project as the research/validation layer.
-
-## Important Research Notes
+## Important Notes
 
 - Rolling percentile is preferred for event triggers because it avoids using future data.
 - Expanding/full-history percentile is useful for current diagnosis, but should be used carefully in historical event testing.
 - High percentile does not automatically mean short. It means price is statistically extended.
 - Event studies should distinguish between mean reversion and momentum continuation.
 
-## Claude Code Context
-
-This scaffold includes `CLAUDE.md` at the project root. Claude Code should use it as the persistent project context and implementation guide. `AGENTS.md` is kept as a broader agent/project instruction file.
 
