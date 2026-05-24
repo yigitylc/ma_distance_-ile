@@ -48,6 +48,11 @@ from ma_distance_lab.reporting import (
 )
 
 
+APP_VERSION = "ticker-form-fix-2026-05-24"
+
+if "active_ticker" not in st.session_state:
+    st.session_state["active_ticker"] = "NVDA"
+
 st.set_page_config(page_title="MA Distance Lab", layout="wide")
 st.title("MA Distance Lab")
 st.caption(
@@ -72,15 +77,21 @@ with st.expander("EWMA reference (formula)", expanded=False):
 
 with st.sidebar:
     st.header("Data")
-    ticker = st.text_input(
-        "YFinance Ticker",
-        value="NVDA",
-        help="Enter any yfinance-compatible ticker manually, e.g. NVDA, SPY, QQQ, GLD, BTC-USD, ^GSPC.",
-    ).upper().strip()
+    st.caption(f"App version: `{APP_VERSION}`")
+    with st.form("ticker_form"):
+        ticker_input = st.text_input(
+            "YFinance Ticker",
+            value=st.session_state.get("active_ticker", "NVDA"),
+            help="Enter any yfinance-compatible ticker manually, e.g. NVDA, SPY, QQQ, GLD, BTC-USD, ^GSPC.",
+        )
+        submitted = st.form_submit_button("Run Analysis")
+    if submitted:
+        st.session_state["active_ticker"] = ticker_input.upper().strip()
+    ticker = st.session_state.get("active_ticker", "NVDA")
     period = "max"
     st.caption("Historical period: `max` — pulls the maximum available yfinance history for the selected ticker.")
     interval = st.selectbox("Interval", ["1d", "1wk", "1mo"], index=0)
-    if st.button("Refresh data"):
+    if st.button("Refresh / Clear Cache"):
         st.cache_data.clear()
         st.rerun()
 
@@ -140,8 +151,11 @@ if not lengths:
 if any(length <= 0 for length in lengths):
     st.error("MA Lengths must be positive integers.")
     st.stop()
+focus_length_auto_added = focus_length not in lengths
 if focus_length not in lengths:
-    lengths = (*lengths, focus_length)
+    lengths = tuple(sorted(set(lengths + (focus_length,))))
+if focus_length_auto_added:
+    st.sidebar.info(f"Added focus length {focus_length} to MA Lengths for this run.")
 
 if not ticker:
     st.warning("Enter a yfinance ticker in the left sidebar.")
@@ -177,7 +191,9 @@ except ValueError as exc:
     st.error(str(exc))
     st.stop()
 except Exception as exc:
-    st.error(f"Could not load data for {ticker}: {exc}")
+    st.error("Unexpected error while loading ticker data.")
+    with st.expander("Technical details"):
+        st.exception(exc)
     st.stop()
 
 prefix = f"{ma_type.lower()}_{focus_length}"
