@@ -11,7 +11,10 @@ from ma_distance_lab.data import MarketDataRequest, fetch_ohlcv
 
 @pytest.fixture(autouse=True)
 def _skip_yfinance_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
+    data_module.clear_market_data_cache()
     monkeypatch.setattr(data_module, "YFINANCE_BACKOFF_SECONDS", ())
+    yield
+    data_module.clear_market_data_cache()
 
 
 def _ensure_yfinance_module() -> None:
@@ -57,7 +60,44 @@ def test_fetch_ohlcv_empty_dataframe_raises_clean_error(monkeypatch: pytest.Monk
         fetch_ohlcv(MarketDataRequest(ticker="ZZZZZZ"))
 
 
-def test_fetch_ohlcv_rate_limit_error_raises_clean_error(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_fetch_ohlcv_empty_yfinance_response_uses_stooq_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _ensure_yfinance_module()
+
+    monkeypatch.setattr("yfinance.download", lambda **_: pd.DataFrame())
+    monkeypatch.setattr(data_module, "_download_stooq", lambda *_, **__: _make_ohlcv())
+
+    df = fetch_ohlcv(MarketDataRequest(ticker="SPY"))
+
+    assert not df.empty
+    assert df.attrs["data_source"] == "Stooq fallback"
+    assert df.attrs["attempted_sources"] == ("Yahoo Finance", "Stooq fallback")
+
+
+def test_fetch_ohlcv_rate_limit_error_raises_clean_error_when_fallback_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _ensure_yfinance_module()
+
+    class YFRateLimitError(Exception):
+        pass
+
+    def raise_rate_limit(**_: object) -> pd.DataFrame:
+        raise YFRateLimitError("Too Many Requests. Rate limited. Try after a while.")
+
+    def raise_fallback_unavailable(*_: object, **__: object) -> pd.DataFrame:
+        raise data_module.MarketDataError("fallback unavailable")
+
+    monkeypatch.setattr("yfinance.download", raise_rate_limit)
+    monkeypatch.setattr(data_module, "_download_stooq", raise_fallback_unavailable)
+    with pytest.raises(data_module.MarketDataError, match="Market data is temporarily unavailable") as exc_info:
+        fetch_ohlcv(MarketDataRequest(ticker="NVDA"))
+
+    assert exc_info.value.attempted_sources == ("Yahoo Finance", "Stooq fallback")
+
+
+def test_fetch_ohlcv_rate_limit_uses_stooq_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     _ensure_yfinance_module()
 
     class YFRateLimitError(Exception):
@@ -67,8 +107,14 @@ def test_fetch_ohlcv_rate_limit_error_raises_clean_error(monkeypatch: pytest.Mon
         raise YFRateLimitError("Too Many Requests. Rate limited. Try after a while.")
 
     monkeypatch.setattr("yfinance.download", raise_rate_limit)
-    with pytest.raises(ValueError, match="Yahoo Finance returned no data or rate-limited"):
-        fetch_ohlcv(MarketDataRequest(ticker="NVDA"))
+    monkeypatch.setattr(data_module, "_download_stooq", lambda *_, **__: _make_ohlcv())
+
+    df = fetch_ohlcv(MarketDataRequest(ticker="NVDA"))
+
+    assert not df.empty
+    assert df.attrs["data_source"] == "Stooq fallback"
+    assert df.attrs["price_source"] == "close_stooq_fallback"
+    assert df.attrs["attempted_sources"] == ("Yahoo Finance", "Stooq fallback")
 
 
 def test_fetch_ohlcv_missing_adj_close_uses_auto_adjusted_close(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -80,6 +126,7 @@ def test_fetch_ohlcv_missing_adj_close_uses_auto_adjusted_close(monkeypatch: pyt
 
     assert df.attrs["data_source"] == "Yahoo Finance"
     assert df.attrs["price_source"] == "close_auto_adjusted"
+    assert df.attrs["attempted_sources"] == ("Yahoo Finance",)
     pd.testing.assert_series_equal(df["price"], df["close"], check_names=False)
     pd.testing.assert_series_equal(df["adj_close"], df["close"], check_names=False)
 
@@ -122,6 +169,48 @@ def test_fetch_ohlcv_uses_simple_yfinance_auto_adjust_call(monkeypatch: pytest.M
     assert "start" in seen_kwargs
     assert "end" in seen_kwargs
     assert "period" not in seen_kwargs
+
+
+def test_fetch_ohlcv_uses_data_layer_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    _ensure_yfinance_module()
+    fake = _make_ohlcv()
+    calls = 0
+
+    def fake_download(**_: object) -> pd.DataFrame:
+        nonlocal calls
+        calls += 1
+        return fake.copy()
+
+    monkeypatch.setattr("yfinance.download", fake_download)
+
+    first = fetch_ohlcv(MarketDataRequest(ticker="SPY", period="max", interval="1d"))
+    second = fetch_ohlcv(MarketDataRequest(ticker="SPY", period="max", interval="1d"))
+
+    assert calls == 1
+    assert not first.empty
+    assert not second.empty
+
+
+def test_fetch_ohlcv_retries_empty_yfinance_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    _ensure_yfinance_module()
+    fake = _make_ohlcv()
+    calls = 0
+
+    def fake_download(**_: object) -> pd.DataFrame:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return pd.DataFrame()
+        return fake.copy()
+
+    monkeypatch.setattr(data_module, "YFINANCE_BACKOFF_SECONDS", (0.0,))
+    monkeypatch.setattr("yfinance.download", fake_download)
+
+    df = fetch_ohlcv(MarketDataRequest(ticker="SPY", period="max", interval="1d"))
+
+    assert calls == 2
+    assert not df.empty
+    assert df.attrs["data_source"] == "Yahoo Finance"
 
 
 def test_fetch_ohlcv_max_uses_yfinance_period(monkeypatch: pytest.MonkeyPatch) -> None:
