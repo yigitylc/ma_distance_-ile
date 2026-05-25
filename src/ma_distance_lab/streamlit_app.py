@@ -13,7 +13,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
-from ma_distance_lab.data import MarketDataRequest, fetch_ohlcv
+from ma_distance_lab.data import MarketDataError, MarketDataRequest, clear_market_data_cache, fetch_ohlcv
 from ma_distance_lab.events import (
     EventStudyConfig,
     compare_event_vs_baseline,
@@ -48,7 +48,7 @@ from ma_distance_lab.reporting import (
 )
 
 
-APP_VERSION = "simple-yfinance-auto-adjust-2026-05-24"
+APP_VERSION = "market-data-resilience"
 DATA_CACHE_TTL_SECONDS = 12 * 60 * 60
 
 if "active_ticker" not in st.session_state:
@@ -60,7 +60,7 @@ st.set_page_config(page_title="MA Distance Lab", layout="wide")
 st.title("MA Distance Lab")
 st.caption(
     "Moving-average distance, rolling percentiles, tail probability, and forward-return event studies. "
-    "Data is fetched from yfinance only after Run Analysis and uses auto-adjusted Close as the research price series."
+    "Data is fetched only after Run Analysis and uses auto-adjusted Close as the research price series when Yahoo Finance is available."
 )
 
 with st.expander("EWMA reference (formula)", expanded=False):
@@ -99,10 +99,13 @@ with st.sidebar:
     st.sidebar.caption(f"App version: {APP_VERSION}")
     if st.session_state.get("has_submitted", False):
         st.sidebar.caption(f"Current submitted ticker: {st.session_state['active_ticker']}")
-    st.sidebar.caption("Data source: Yahoo Finance via yfinance. Public cloud apps may occasionally be rate-limited.")
+    st.sidebar.caption(
+        "Primary data source: Yahoo Finance via yfinance. A Stooq daily fallback is used for supported US tickers if Yahoo is unavailable."
+    )
     period = st.selectbox("Historical period", ["5y", "10y", "max"], index=1)
     interval = st.selectbox("Interval", ["1d", "1wk", "1mo"], index=0)
     if st.sidebar.button("Refresh / Clear Cache"):
+        clear_market_data_cache()
         st.cache_data.clear()
         st.rerun()
 
@@ -207,12 +210,19 @@ def load_and_compute(
 
 
 try:
-    with st.spinner(f"Loading {ticker} from Yahoo Finance..."):
+    with st.spinner(f"Loading market data for {ticker}..."):
         features = load_and_compute(ticker, period, interval, ma_type, lengths, int(rolling_window))
+except MarketDataError as exc:
+    st.error(str(exc))
+    if exc.attempted_sources:
+        st.caption(f"Attempted data sources: {', '.join(exc.attempted_sources)}")
+    st.info(
+        "Try Refresh / Clear Cache, wait a few minutes, or use a common daily US ticker such as SPY, QQQ, GLD, or NVDA. "
+        "The fallback provider only supports daily data for supported US equity and ETF symbols."
+    )
+    st.stop()
 except ValueError as exc:
     st.error(str(exc))
-    with st.expander("Technical details"):
-        st.exception(exc)
     st.stop()
 except Exception as exc:
     st.error("Unexpected error while loading ticker data.")
@@ -231,9 +241,17 @@ snapshot = latest_snapshot_table(features, ma_type, lengths)
 valid_rows = features["price"].dropna().shape[0]
 price_source = features.attrs.get("price_source", "—")
 data_source = features.attrs.get("data_source", "Yahoo Finance")
+attempted_sources = tuple(features.attrs.get("attempted_sources", ("Yahoo Finance",)))
+data_cache_ttl_hours = int(features.attrs.get("market_data_cache_ttl_seconds", 0)) / 3600
 first_date = features.index.min()
 last_date = features.index.max()
 st.sidebar.success(f"Loaded {ticker}: {valid_rows:,} rows")
+if data_source != "Yahoo Finance":
+    st.sidebar.warning(f"Loaded via {data_source}")
+    st.warning(
+        f"Yahoo Finance was unavailable for this request, so this run used {data_source}. "
+        "Fallback coverage is limited to daily data for supported US equity and ETF tickers."
+    )
 
 if features[pct_col].dropna().empty:
     st.warning(
@@ -270,6 +288,25 @@ m8.metric("MA type", ma_type)
 m9.metric("Focus MA", str(focus_length))
 m10.metric("Rolling window", str(int(rolling_window)))
 st.caption(f"Price source: {price_source}")
+
+with st.expander("Market data diagnostics", expanded=False):
+    st.dataframe(
+        pd.DataFrame(
+            [
+                {"Field": "Primary provider", "Value": "Yahoo Finance via yfinance"},
+                {"Field": "Fallback provider", "Value": "Stooq daily CSV for supported US tickers"},
+                {"Field": "Provider used", "Value": data_source},
+                {"Field": "Providers attempted", "Value": ", ".join(attempted_sources)},
+                {"Field": "yfinance threads", "Value": "False"},
+                {"Field": "Retry backoff", "Value": "1s, then 3s"},
+                {"Field": "Streamlit cache TTL", "Value": f"{DATA_CACHE_TTL_SECONDS // 3600} hours"},
+                {"Field": "Provider cache TTL", "Value": f"{data_cache_ttl_hours:g} hours"},
+                {"Field": "Fallback interval support", "Value": "1d only"},
+            ]
+        ),
+        width="stretch",
+        hide_index=True,
+    )
 
 run_meta = RunMetadata(
     ticker=ticker,
