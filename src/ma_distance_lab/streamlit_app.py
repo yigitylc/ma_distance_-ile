@@ -55,8 +55,8 @@ if "active_ticker" not in st.session_state:
 if "has_submitted" not in st.session_state:
     st.session_state["has_submitted"] = False
 
-st.set_page_config(page_title="MA Distance Lab", layout="wide")
-st.title("MA Distance Lab")
+st.set_page_config(page_title="MA Distance %ile", layout="wide")
+st.title("MA Distance %ile")
 st.caption(
     "Moving-average distance, rolling percentiles, tail probability, and forward-return event studies. "
     "Data is fetched only after Run Analysis and uses auto-adjusted Close as the research price series when Yahoo Finance is available."
