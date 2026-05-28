@@ -48,7 +48,6 @@ from ma_distance_lab.reporting import (
 )
 
 
-APP_VERSION = "market-data-resilience"
 DATA_CACHE_TTL_SECONDS = 12 * 60 * 60
 
 if "active_ticker" not in st.session_state:
@@ -96,13 +95,7 @@ with st.sidebar:
         st.session_state["active_ticker"] = cleaned
         st.session_state["has_submitted"] = True
         st.rerun()
-    st.sidebar.caption(f"App version: {APP_VERSION}")
-    if st.session_state.get("has_submitted", False):
-        st.sidebar.caption(f"Current submitted ticker: {st.session_state['active_ticker']}")
-    st.sidebar.caption(
-        "Primary data source: Yahoo Finance via yfinance. A Stooq daily fallback is used for supported US tickers if Yahoo is unavailable."
-    )
-    period = st.selectbox("Historical period", ["5y", "10y", "max"], index=1)
+    period = st.selectbox("Historical period", ["5y", "10y", "max"], index=2)
     interval = st.selectbox("Interval", ["1d", "1wk", "1mo"], index=0)
     if st.sidebar.button("Refresh / Clear Cache"):
         clear_market_data_cache()
@@ -157,6 +150,15 @@ def _render_inline(title: str, body: str, *, expanded: bool = True) -> None:
         return
     with st.expander(title, expanded=expanded):
         st.markdown(body)
+
+
+def _display_price_source(price_source: str) -> str:
+    if price_source == "close_auto_adjusted":
+        return "Auto-adjusted Close"
+    if price_source.startswith("close_"):
+        return "Close"
+    return "Price"
+
 
 try:
     lengths = tuple(int(x.strip()) for x in lengths_text.split(",") if x.strip())
@@ -214,11 +216,8 @@ try:
         features = load_and_compute(ticker, period, interval, ma_type, lengths, int(rolling_window))
 except MarketDataError as exc:
     st.error(str(exc))
-    if exc.attempted_sources:
-        st.caption(f"Attempted data sources: {', '.join(exc.attempted_sources)}")
     st.info(
-        "Try Refresh / Clear Cache, wait a few minutes, or use a common daily US ticker such as SPY, QQQ, GLD, or NVDA. "
-        "The fallback provider only supports daily data for supported US equity and ETF symbols."
+        "Try Refresh / Clear Cache, wait a few minutes, or use a common daily US ticker such as SPY, QQQ, GLD, or NVDA."
     )
     st.stop()
 except ValueError as exc:
@@ -239,19 +238,10 @@ tail_col = f"{prefix}_roll_tail"
 
 snapshot = latest_snapshot_table(features, ma_type, lengths)
 valid_rows = features["price"].dropna().shape[0]
-price_source = features.attrs.get("price_source", "—")
-data_source = features.attrs.get("data_source", "Yahoo Finance")
-attempted_sources = tuple(features.attrs.get("attempted_sources", ("Yahoo Finance",)))
-data_cache_ttl_hours = int(features.attrs.get("market_data_cache_ttl_seconds", 0)) / 3600
+price_source = _display_price_source(features.attrs.get("price_source", "close_auto_adjusted"))
 first_date = features.index.min()
 last_date = features.index.max()
 st.sidebar.success(f"Loaded {ticker}: {valid_rows:,} rows")
-if data_source != "Yahoo Finance":
-    st.sidebar.warning(f"Loaded via {data_source}")
-    st.warning(
-        f"Yahoo Finance was unavailable for this request, so this run used {data_source}. "
-        "Fallback coverage is limited to daily data for supported US equity and ETF tickers."
-    )
 
 if features[pct_col].dropna().empty:
     st.warning(
@@ -280,33 +270,13 @@ m1.metric("Ticker", ticker)
 m2.metric("Interval", interval)
 m3.metric("Period", period)
 m4.metric("Bars loaded", f"{valid_rows:,}")
-m5.metric("Data source", data_source)
+m5.metric("Research price", price_source)
 m6, m7, m8, m9, m10 = st.columns(5)
 m6.metric("First date", str(pd.Timestamp(first_date).date()) if pd.notna(first_date) else "—")
 m7.metric("Last date", str(pd.Timestamp(last_date).date()) if pd.notna(last_date) else "—")
 m8.metric("MA type", ma_type)
 m9.metric("Focus MA", str(focus_length))
 m10.metric("Rolling window", str(int(rolling_window)))
-st.caption(f"Price source: {price_source}")
-
-with st.expander("Market data diagnostics", expanded=False):
-    st.dataframe(
-        pd.DataFrame(
-            [
-                {"Field": "Primary provider", "Value": "Yahoo Finance via yfinance"},
-                {"Field": "Fallback provider", "Value": "Stooq daily CSV for supported US tickers"},
-                {"Field": "Provider used", "Value": data_source},
-                {"Field": "Providers attempted", "Value": ", ".join(attempted_sources)},
-                {"Field": "yfinance threads", "Value": "False"},
-                {"Field": "Retry backoff", "Value": "1s, then 3s"},
-                {"Field": "Streamlit cache TTL", "Value": f"{DATA_CACHE_TTL_SECONDS // 3600} hours"},
-                {"Field": "Provider cache TTL", "Value": f"{data_cache_ttl_hours:g} hours"},
-                {"Field": "Fallback interval support", "Value": "1d only"},
-            ]
-        ),
-        width="stretch",
-        hide_index=True,
-    )
 
 run_meta = RunMetadata(
     ticker=ticker,
