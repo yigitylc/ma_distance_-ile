@@ -97,7 +97,7 @@ with st.sidebar:
         st.rerun()
     period = st.selectbox("Historical period", ["5y", "10y", "max"], index=2)
     interval = st.selectbox("Interval", ["1d", "1wk", "1mo"], index=0)
-    if st.sidebar.button("Refresh / Clear Cache"):
+    if st.sidebar.button("Refresh"):
         clear_market_data_cache()
         st.cache_data.clear()
         st.rerun()
