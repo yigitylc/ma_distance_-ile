@@ -36,6 +36,23 @@ def _make_ohlcv() -> pd.DataFrame:
     )
 
 
+def _make_stooq_history(provider_symbol: str = "spy.us") -> types.SimpleNamespace:
+    return types.SimpleNamespace(
+        data=_make_ohlcv(),
+        provider="stooq",
+        provider_symbol=provider_symbol,
+        price_basis="stooq_close",
+        attempted_providers=(
+            types.SimpleNamespace(
+                provider="stooq",
+                provider_symbol=provider_symbol,
+                status="success",
+                message="",
+            ),
+        ),
+    )
+
+
 def test_fetch_ohlcv_empty_ticker_raises() -> None:
     with pytest.raises(ValueError, match="Ticker cannot be empty"):
         fetch_ohlcv(MarketDataRequest(ticker=""))
@@ -55,8 +72,13 @@ def test_fetch_ohlcv_rejects_multiple_ticker_input(monkeypatch: pytest.MonkeyPat
 def test_fetch_ohlcv_empty_dataframe_raises_clean_error(monkeypatch: pytest.MonkeyPatch) -> None:
     _ensure_yfinance_module()
     monkeypatch.setattr("yfinance.download", lambda **_: pd.DataFrame())
+    monkeypatch.setattr(
+        data_module,
+        "get_price_history",
+        lambda *_, **__: (_ for _ in ()).throw(data_module.StooqFallbackError("no match")),
+    )
 
-    with pytest.raises(ValueError, match="Yahoo Finance returned no data or rate-limited"):
+    with pytest.raises(data_module.MarketDataError, match="Market data is temporarily unavailable"):
         fetch_ohlcv(MarketDataRequest(ticker="ZZZZZZ"))
 
 
@@ -66,12 +88,15 @@ def test_fetch_ohlcv_empty_yfinance_response_uses_stooq_fallback(
     _ensure_yfinance_module()
 
     monkeypatch.setattr("yfinance.download", lambda **_: pd.DataFrame())
-    monkeypatch.setattr(data_module, "_download_stooq", lambda *_, **__: _make_ohlcv())
+    monkeypatch.setattr(data_module, "get_price_history", lambda *_, **__: _make_stooq_history("spy.us"))
 
     df = fetch_ohlcv(MarketDataRequest(ticker="SPY"))
 
     assert not df.empty
     assert df.attrs["data_source"] == "Stooq fallback"
+    assert df.attrs["provider"] == "stooq"
+    assert df.attrs["provider_symbol"] == "spy.us"
+    assert df.attrs["price_basis"] == "stooq_close"
     assert df.attrs["attempted_sources"] == ("Yahoo Finance", "Stooq fallback")
 
 
@@ -86,11 +111,11 @@ def test_fetch_ohlcv_rate_limit_error_raises_clean_error_when_fallback_unavailab
     def raise_rate_limit(**_: object) -> pd.DataFrame:
         raise YFRateLimitError("Too Many Requests. Rate limited. Try after a while.")
 
-    def raise_fallback_unavailable(*_: object, **__: object) -> pd.DataFrame:
-        raise data_module.MarketDataError("fallback unavailable")
+    def raise_fallback_unavailable(*_: object, **__: object) -> object:
+        raise data_module.StooqFallbackError("fallback unavailable")
 
     monkeypatch.setattr("yfinance.download", raise_rate_limit)
-    monkeypatch.setattr(data_module, "_download_stooq", raise_fallback_unavailable)
+    monkeypatch.setattr(data_module, "get_price_history", raise_fallback_unavailable)
     with pytest.raises(data_module.MarketDataError, match="Market data is temporarily unavailable") as exc_info:
         fetch_ohlcv(MarketDataRequest(ticker="NVDA"))
 
@@ -107,14 +132,33 @@ def test_fetch_ohlcv_rate_limit_uses_stooq_fallback(monkeypatch: pytest.MonkeyPa
         raise YFRateLimitError("Too Many Requests. Rate limited. Try after a while.")
 
     monkeypatch.setattr("yfinance.download", raise_rate_limit)
-    monkeypatch.setattr(data_module, "_download_stooq", lambda *_, **__: _make_ohlcv())
+    monkeypatch.setattr(data_module, "get_price_history", lambda *_, **__: _make_stooq_history("nvda.us"))
 
     df = fetch_ohlcv(MarketDataRequest(ticker="NVDA"))
 
     assert not df.empty
     assert df.attrs["data_source"] == "Stooq fallback"
     assert df.attrs["price_source"] == "close_stooq_fallback"
+    assert df.attrs["provider"] == "stooq"
+    assert df.attrs["provider_symbol"] == "nvda.us"
+    assert df.attrs["price_basis"] == "stooq_close"
     assert df.attrs["attempted_sources"] == ("Yahoo Finance", "Stooq fallback")
+
+
+def test_fetch_ohlcv_non_daily_interval_does_not_call_stooq_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _ensure_yfinance_module()
+
+    monkeypatch.setattr("yfinance.download", lambda **_: pd.DataFrame())
+
+    def fail_if_called(*_: object, **__: object) -> object:
+        raise AssertionError("Stooq fallback should not be called for non-daily intervals")
+
+    monkeypatch.setattr(data_module, "get_price_history", fail_if_called)
+
+    with pytest.raises(data_module.MarketDataError, match="Market data is temporarily unavailable"):
+        fetch_ohlcv(MarketDataRequest(ticker="SPY", interval="1wk"))
 
 
 def test_fetch_ohlcv_missing_adj_close_uses_auto_adjusted_close(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -125,6 +169,9 @@ def test_fetch_ohlcv_missing_adj_close_uses_auto_adjusted_close(monkeypatch: pyt
     df = fetch_ohlcv(MarketDataRequest(ticker="NVDA"))
 
     assert df.attrs["data_source"] == "Yahoo Finance"
+    assert df.attrs["provider"] == "yfinance"
+    assert df.attrs["provider_symbol"] == "NVDA"
+    assert df.attrs["price_basis"] == "yfinance_adjusted_close"
     assert df.attrs["price_source"] == "close_auto_adjusted"
     assert df.attrs["attempted_sources"] == ("Yahoo Finance",)
     pd.testing.assert_series_equal(df["price"], df["close"], check_names=False)
@@ -158,6 +205,11 @@ def test_fetch_ohlcv_uses_simple_yfinance_auto_adjust_call(monkeypatch: pytest.M
         return fake.copy()
 
     monkeypatch.setattr("yfinance.download", fake_download)
+    monkeypatch.setattr(
+        data_module,
+        "get_price_history",
+        lambda *_, **__: (_ for _ in ()).throw(AssertionError("fallback should not be called")),
+    )
 
     df = fetch_ohlcv(MarketDataRequest(ticker="SPY", period="10y", interval="1d"))
 

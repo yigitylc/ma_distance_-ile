@@ -81,6 +81,7 @@ def build_ma_distance_features(
     config: FeatureConfig = FeatureConfig(),
 ) -> pd.DataFrame:
     out = df.copy()
+    out.attrs.update(df.attrs)
     price = out[price_col]
     volume = out["volume"] if "volume" in out.columns else None
 
