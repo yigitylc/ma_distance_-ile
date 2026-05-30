@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import re
 import time
 from typing import Optional
 
 import pandas as pd
+from stooq_market_data_fallback import (
+    MarketDataError as StooqFallbackError,
+    get_price_history,
+)
 
 
 YFINANCE_ERROR_MESSAGE = (
@@ -26,7 +29,10 @@ YFINANCE_RATE_LIMIT_MARKERS = (
 )
 STOOQ_FALLBACK_SOURCE = "Stooq fallback"
 YAHOO_SOURCE = "Yahoo Finance"
-_COMMON_US_TICKER_RE = re.compile(r"[A-Z]{1,5}(\.[A-Z])?")
+YFINANCE_PROVIDER = "yfinance"
+STOOQ_PROVIDER = "stooq"
+YFINANCE_PRICE_BASIS = "yfinance_adjusted_close"
+STOOQ_PRICE_BASIS = "stooq_close"
 _MARKET_DATA_CACHE: dict[tuple[object, ...], tuple[float, pd.DataFrame]] = {}
 
 
@@ -50,7 +56,11 @@ class MarketDataResult:
     frame: pd.DataFrame
     data_source: str
     price_source: str
+    provider: str
+    provider_symbol: str
+    price_basis: str
     attempted_sources: tuple[str, ...]
+    attempted_providers: tuple[object, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -162,17 +172,6 @@ def _period_dates(period: str) -> tuple[str | None, str | None]:
     return start.date().isoformat(), end.date().isoformat()
 
 
-def _stooq_symbol(ticker: str) -> str | None:
-    normalized = ticker.upper().replace("-", ".")
-    if not _COMMON_US_TICKER_RE.fullmatch(normalized):
-        return None
-    return f"{normalized}.US".lower()
-
-
-def _read_stooq_csv(url: str) -> pd.DataFrame:
-    return pd.read_csv(url)
-
-
 def _download_stooq(
     ticker: str,
     period: str,
@@ -184,37 +183,42 @@ def _download_stooq(
     if interval != "1d":
         _raise_market_data_error(f"{STOOQ_FALLBACK_SOURCE} only supports daily data.")
 
-    symbol = _stooq_symbol(ticker)
-    if symbol is None:
-        _raise_market_data_error(
-            f"{STOOQ_FALLBACK_SOURCE} supports common US equity and ETF tickers only."
-        )
-
-    query_parts = [f"https://stooq.com/q/d/l/?s={symbol}", "i=d"]
     stooq_start = start
     stooq_end = end
     if not (start or end):
         stooq_start, stooq_end = _period_dates(period)
-    if stooq_start:
-        query_parts.append(f"d1={stooq_start.replace('-', '')}")
-    if stooq_end:
-        query_parts.append(f"d2={stooq_end.replace('-', '')}")
-    url = "&".join(query_parts)
 
     try:
-        df = _read_stooq_csv(url)
-    except Exception as exc:
-        _raise_market_data_error(f"{STOOQ_FALLBACK_SOURCE} request failed.", cause=exc)
+        history = get_price_history(
+            ticker,
+            start=stooq_start,
+            end=stooq_end,
+            interval="1d",
+            preferred_provider="stooq",
+            fallback=False,
+            cache=None,
+        )
+    except StooqFallbackError as exc:
+        _raise_market_data_error(
+            f"{STOOQ_FALLBACK_SOURCE} could not resolve or fetch daily OHLCV for {ticker}.",
+            cause=exc,
+        )
 
-    if not isinstance(df, pd.DataFrame) or df.empty or "Date" not in df.columns:
+    df = history.data.copy()
+    if (
+        not isinstance(df, pd.DataFrame)
+        or df.empty
+        or not isinstance(df.index, pd.DatetimeIndex)
+    ):
         _raise_market_data_error(f"{STOOQ_FALLBACK_SOURCE} returned no data.")
 
-    df = df.copy()
-    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-    df = df[df["Date"].notna()]
-    if df.empty:
-        _raise_market_data_error(f"{STOOQ_FALLBACK_SOURCE} returned no dated rows.")
-    return df.set_index("Date").sort_index()
+    df.attrs["data_source"] = STOOQ_FALLBACK_SOURCE
+    df.attrs["provider"] = history.provider
+    df.attrs["provider_symbol"] = history.provider_symbol
+    df.attrs["price_basis"] = history.price_basis
+    df.attrs["price_source"] = "close_stooq_fallback"
+    df.attrs["attempted_providers"] = history.attempted_providers
+    return df.sort_index()
 
 
 def _download_yfinance_uncached(
@@ -339,6 +343,9 @@ def _download_market_data(
         (YAHOO_SOURCE, "close_auto_adjusted"),
         (STOOQ_FALLBACK_SOURCE, "close_stooq_fallback"),
     ):
+        if source == STOOQ_FALLBACK_SOURCE and interval != "1d":
+            continue
+
         attempted_sources.append(source)
         try:
             df = _download_provider(
@@ -360,11 +367,26 @@ def _download_market_data(
         if df.empty:
             errors.append(MarketDataError(f"{source} returned no data."))
             continue
+
+        provider = df.attrs.get(
+            "provider",
+            YFINANCE_PROVIDER if source == YAHOO_SOURCE else STOOQ_PROVIDER,
+        )
+        provider_symbol = df.attrs.get("provider_symbol", ticker)
+        price_basis = df.attrs.get(
+            "price_basis",
+            YFINANCE_PRICE_BASIS if source == YAHOO_SOURCE else STOOQ_PRICE_BASIS,
+        )
+        attempted_providers = df.attrs.get("attempted_providers", ())
         return MarketDataResult(
             frame=df,
             data_source=source,
             price_source=price_source,
+            provider=str(provider),
+            provider_symbol=str(provider_symbol),
+            price_basis=str(price_basis),
             attempted_sources=tuple(attempted_sources),
+            attempted_providers=tuple(attempted_providers),
         )
 
     last_error = errors[-1] if errors else None
@@ -384,7 +406,11 @@ def _prepare_ohlcv_frame(
     auto_adjust: bool,
     data_source: str = YAHOO_SOURCE,
     price_source: str = "close_auto_adjusted",
+    provider: str = YFINANCE_PROVIDER,
+    provider_symbol: str | None = None,
+    price_basis: str = YFINANCE_PRICE_BASIS,
     attempted_sources: tuple[str, ...] = (YAHOO_SOURCE,),
+    attempted_providers: tuple[object, ...] = (),
 ) -> pd.DataFrame:
     if df.empty:
         raise MarketDataError(YFINANCE_ERROR_MESSAGE)
@@ -419,8 +445,12 @@ def _prepare_ohlcv_frame(
     df.attrs["auto_adjust"] = auto_adjust
     df.attrs["price_col"] = "price"
     df.attrs["price_source"] = price_source
+    df.attrs["price_basis"] = price_basis
     df.attrs["data_source"] = data_source
+    df.attrs["provider"] = provider
+    df.attrs["provider_symbol"] = provider_symbol or ticker
     df.attrs["attempted_sources"] = attempted_sources
+    df.attrs["attempted_providers"] = attempted_providers
     df.attrs["market_data_cache_ttl_seconds"] = MARKET_DATA_CACHE_TTL_SECONDS
     return df
 
@@ -447,7 +477,11 @@ def fetch_ohlcv(req: MarketDataRequest) -> pd.DataFrame:
             auto_adjust=auto_adjust,
             data_source=result.data_source,
             price_source=result.price_source,
+            provider=result.provider,
+            provider_symbol=result.provider_symbol,
+            price_basis=result.price_basis,
             attempted_sources=result.attempted_sources,
+            attempted_providers=result.attempted_providers,
         )
     except MarketDataError:
         raise

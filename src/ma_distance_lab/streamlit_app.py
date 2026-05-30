@@ -26,6 +26,11 @@ from ma_distance_lab.features import (
     focus_distance_series,
     latest_snapshot_table,
 )
+from ma_distance_lab.market_data_display import (
+    display_price_basis,
+    display_price_source,
+    display_provider_symbol,
+)
 from ma_distance_lab.interpretation import (
     RunMetadata,
     build_bottom_report,
@@ -152,14 +157,6 @@ def _render_inline(title: str, body: str, *, expanded: bool = True) -> None:
         st.markdown(body)
 
 
-def _display_price_source(price_source: str) -> str:
-    if price_source == "close_auto_adjusted":
-        return "Auto-adjusted Close"
-    if price_source.startswith("close_"):
-        return "Close"
-    return "Price"
-
-
 try:
     lengths = tuple(int(x.strip()) for x in lengths_text.split(",") if x.strip())
 except ValueError:
@@ -238,10 +235,19 @@ tail_col = f"{prefix}_roll_tail"
 
 snapshot = latest_snapshot_table(features, ma_type, lengths)
 valid_rows = features["price"].dropna().shape[0]
-price_source = _display_price_source(features.attrs.get("price_source", "close_auto_adjusted"))
+data_source = features.attrs.get("data_source", "Yahoo Finance")
+provider = features.attrs.get("provider", "yfinance")
+provider_symbol = features.attrs.get("provider_symbol", ticker)
+price_basis = features.attrs.get("price_basis", "yfinance_adjusted_close")
+price_source = display_price_source(features.attrs.get("price_source", "close_auto_adjusted"))
+price_basis_label = display_price_basis(price_basis)
+provider_symbol_label = display_provider_symbol(ticker, provider_symbol)
 first_date = features.index.min()
 last_date = features.index.max()
 st.sidebar.success(f"Loaded {ticker}: {valid_rows:,} rows")
+
+if provider == "stooq":
+    st.info("Using Stooq daily close fallback. This is not Yahoo adjusted close.")
 
 if features[pct_col].dropna().empty:
     st.warning(
@@ -267,16 +273,20 @@ comparison = compare_event_vs_baseline(summary, baseline_summary)
 st.subheader("Run summary")
 m1, m2, m3, m4, m5 = st.columns(5)
 m1.metric("Ticker", ticker)
-m2.metric("Interval", interval)
-m3.metric("Period", period)
-m4.metric("Bars loaded", f"{valid_rows:,}")
+m2.metric("Data provider", data_source)
+m3.metric("Provider symbol", provider_symbol_label)
+m4.metric("Price basis", price_basis_label)
 m5.metric("Research price", price_source)
 m6, m7, m8, m9, m10 = st.columns(5)
-m6.metric("First date", str(pd.Timestamp(first_date).date()) if pd.notna(first_date) else "—")
-m7.metric("Last date", str(pd.Timestamp(last_date).date()) if pd.notna(last_date) else "—")
-m8.metric("MA type", ma_type)
-m9.metric("Focus MA", str(focus_length))
-m10.metric("Rolling window", str(int(rolling_window)))
+m6.metric("Interval", interval)
+m7.metric("Period", period)
+m8.metric("Bars loaded", f"{valid_rows:,}")
+m9.metric("First date", str(pd.Timestamp(first_date).date()) if pd.notna(first_date) else "—")
+m10.metric("Last date", str(pd.Timestamp(last_date).date()) if pd.notna(last_date) else "—")
+m11, m12, m13 = st.columns(3)
+m11.metric("MA type", ma_type)
+m12.metric("Focus MA", str(focus_length))
+m13.metric("Rolling window", str(int(rolling_window)))
 
 run_meta = RunMetadata(
     ticker=ticker,
@@ -312,7 +322,7 @@ with c1:
                 high=adj_high,
                 low=adj_low,
                 close=adj_close_series,
-                name="OHLC (adjusted)",
+                name="OHLC (adjusted)" if price_basis == "yfinance_adjusted_close" else "OHLC (Stooq close)",
                 increasing_line_color="#2ca02c",
                 decreasing_line_color="#d62728",
                 increasing_fillcolor="#2ca02c",

@@ -108,3 +108,28 @@ def test_focus_distance_series_returns_dev_pct():
     out = focus_distance_series(features, "EMA", 50)
     assert out.name == "ema_50_dev_pct" or out.name == "ema_50_dev_pct"
     pd.testing.assert_series_equal(out, features["ema_50_dev_pct"].dropna())
+
+
+def test_build_ma_distance_features_preserves_market_data_attrs():
+    idx = pd.date_range("2024-01-01", periods=120, freq="B")
+    df = pd.DataFrame(
+        {
+            "price": np.linspace(100.0, 120.0, len(idx)),
+            "volume": np.full(len(idx), 1000.0),
+        },
+        index=idx,
+    )
+    df.attrs["provider"] = "stooq"
+    df.attrs["provider_symbol"] = "nvda.us"
+    df.attrs["price_basis"] = "stooq_close"
+    df.attrs["data_source"] = "Stooq fallback"
+
+    features = build_ma_distance_features(
+        df,
+        config=FeatureConfig(ma_type="EMA", lengths=(20,), rolling_window=50),
+    )
+
+    assert features.attrs["provider"] == "stooq"
+    assert features.attrs["provider_symbol"] == "nvda.us"
+    assert features.attrs["price_basis"] == "stooq_close"
+    assert features.attrs["data_source"] == "Stooq fallback"

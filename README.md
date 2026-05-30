@@ -11,9 +11,10 @@ A Python research for studying how far price is from moving averages and what hi
 
 ## Current Scope
 
-- Uses yfinance OHLCV data.
+- Uses yfinance OHLCV data as the primary source, with Stooq daily OHLCV fallback when yfinance fails or returns no data.
 - Dashboard defaults to `period='max'` so it pulls the maximum available yfinance history for the manually entered ticker.
-- Uses adjusted close as the research price series when available.
+- Uses Yahoo adjusted close as the preferred research price series when available.
+- Labels provider and price basis when Stooq fallback is used, because Stooq close is not Yahoo adjusted close.
 - Lets the ticker be manually entered from the left Streamlit sidebar, e.g. `NVDA`, `SPY`, `QQQ`, `GLD`, `BTC-USD`, `^GSPC`.
 - Lets the rolling window be manually adjusted from the left Streamlit sidebar.
 - Computes MA distance in percent.
@@ -30,5 +31,6 @@ A Python research for studying how far price is from moving averages and what hi
 - Expanding/full-history percentile is useful for current diagnosis, but should be used carefully in historical event testing.
 - High percentile does not automatically mean short. It means price is statistically extended.
 - Event studies should distinguish between mean reversion and momentum continuation.
+- Stooq fallback is daily OHLCV-oriented only. It is not a replacement for Yahoo adjusted close, dividends, splits, options, fundamentals, metadata, or intraday/non-daily data.
 
 

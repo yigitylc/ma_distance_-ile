@@ -11,6 +11,7 @@ dependencies = [
     "numpy>=1.26",
     "pandas>=2.1",
     "yfinance>=0.2.40",
+    "stooq-market-data-fallback @ git+https://github.com/yigitylc/stooq-market-data-fallback.git@c617f93",
     "plotly>=5.20",
     "streamlit>=1.35",
     "PyYAML>=6.0",
